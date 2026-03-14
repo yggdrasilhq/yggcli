@@ -1,0 +1,12 @@
+[package]
+name = "yggcli"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UX for generating Yggdrasil ecosystem configuration."
+license = "Apache-2.0"
+
+[dependencies]
+crossterm = "0.28"
+ratatui = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"

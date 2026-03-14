@@ -1,5 +1,5 @@
-node_modules/
+target/
 dist/
+yggcli.local.toml
 *.log
 .DS_Store
-bun.lockb
