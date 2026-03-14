@@ -40,6 +40,13 @@ The current scaffold writes:
 - `yggclient/config/profiles.local.env`
 - `yggsync/ygg_sync.local.toml`
 
+For a first-time server:
+
+- keep `apt_proxy_mode=off`
+- build and boot the host
+- create the apt-proxy LXC from the docs recipe
+- switch `apt_proxy_mode=explicit` and set the proxy URL for subsequent builds
+
 The intent is simple:
 
 - the repos stay independently usable

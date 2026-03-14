@@ -109,6 +109,7 @@ struct YggdrasilConfig {
     build_profile: String,
     enable_qemu_smoke: bool,
     setup_mode: String,
+    apt_proxy_mode: String,
     embed_ssh_keys: bool,
     ssh_authorized_keys_file: String,
     hostname: String,
@@ -268,6 +269,7 @@ impl App {
                 Field::text("build_profile", "both"),
                 Field::boolean("enable_qemu_smoke", false),
                 Field::text("setup_mode", "recommended"),
+                Field::text("apt_proxy_mode", "off"),
                 Field::boolean("embed_ssh_keys", true),
                 Field::text("ssh_authorized_keys_file", "/root/.ssh/authorized_keys"),
                 Field::text("hostname", "yggdrasil"),
@@ -369,6 +371,7 @@ impl App {
             cfg.enable_qemu_smoke,
         );
         Self::set_field(&mut self.yggdrasil, "setup_mode", cfg.setup_mode);
+        Self::set_field(&mut self.yggdrasil, "apt_proxy_mode", cfg.apt_proxy_mode);
         Self::set_bool_field(&mut self.yggdrasil, "embed_ssh_keys", cfg.embed_ssh_keys);
         Self::set_field(
             &mut self.yggdrasil,
@@ -524,6 +527,7 @@ impl App {
             build_profile: self.get(&self.yggdrasil, "build_profile"),
             enable_qemu_smoke: self.get_bool(&self.yggdrasil, "enable_qemu_smoke"),
             setup_mode: self.get(&self.yggdrasil, "setup_mode"),
+            apt_proxy_mode: self.get(&self.yggdrasil, "apt_proxy_mode"),
             embed_ssh_keys: self.get_bool(&self.yggdrasil, "embed_ssh_keys"),
             ssh_authorized_keys_file: self.get(&self.yggdrasil, "ssh_authorized_keys_file"),
             hostname: self.get(&self.yggdrasil, "hostname"),
@@ -1050,7 +1054,7 @@ fn draw(frame: &mut Frame, app: &App) {
 
     let help = match app.section() {
         Section::Workspace => "Choose where yggcli should write native config files for the server, client, and sync repos.",
-        Section::Yggdrasil => "Server ISO settings. Keep this generic in public examples and put your private values in ygg.local.toml.",
+        Section::Yggdrasil => "Server ISO settings. Start with apt_proxy_mode=off for the first build. After the host is alive, follow the apt-proxy LXC recipe and switch to apt_proxy_mode=explicit with your proxy URL in ygg.local.toml.",
         Section::Yggclient => "Endpoint profile settings. yggcli writes both yggclient.local.toml and config/profiles.local.env.",
         Section::Yggsync => "Sync engine settings. Start with a few safe jobs before you widen the net.",
     };
