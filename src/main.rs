@@ -7,13 +7,16 @@ use std::{
 };
 use serde::{Deserialize, Serialize};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap},
     Terminal,
 };
 
@@ -224,6 +227,11 @@ struct App {
     yggclient: Vec<Field>,
     yggsync: Vec<Field>,
     status: String,
+}
+
+struct UiLayout {
+    outer: Vec<Rect>,
+    body: Vec<Rect>,
 }
 
 struct SaveReport {
@@ -758,7 +766,7 @@ fn write_file(path: &Path, contents: &str, force: bool, report: &mut SaveReport)
 
 fn usage() {
     println!(
-        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]              Run non-interactive workflow\n\nOptions:\n  --workspace PATH              Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL               Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                   Clone missing ecosystem repos\n  --write-defaults              Write local config files using sensible defaults\n  --force                       Overwrite existing local config files\n  --build-iso                   Run yggdrasil build after config generation\n  --smoke                       Run smoke bench explicitly after build/config\n  --profile server|kde|both     Profile for build/smoke (default: both)\n  --skip-smoke                  Skip smoke inside mkconfig build step\n  --with-qemu                   Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                    Show this help\n"
+        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]               Run non-interactive workflow\n\nOptions:\n  --workspace PATH               Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL                Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                    Clone missing ecosystem repos\n  --write-defaults               Write local config files using sensible defaults\n  --force                        Overwrite existing local config files\n  --build-iso                    Run yggdrasil build after config generation\n  --smoke                        Run smoke bench explicitly after build/config\n  --profile server|kde|both      Profile for build/smoke (default: both)\n  --skip-smoke                   Skip smoke inside mkconfig build step\n  --with-qemu                    Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                     Show this help\n\nExamples:\n  yggcli --bootstrap --write-defaults\n  yggcli --workspace ~/gh --build-iso --profile server\n  yggcli --workspace ~/gh --smoke --profile kde --with-qemu\n\nGuidance:\n  - First server build: keep apt_proxy_mode=off.\n  - After the host is alive, follow the apt-proxy LXC recipe in yggdocs and switch to apt_proxy_mode=explicit.\n  - Android/Termux hosts can configure yggclient and yggsync, but they do not build yggdrasil ISOs.\n\nTUI controls:\n  - Keyboard: Tab/Shift-Tab switch sections, Up/Down move, Enter toggles booleans, Ctrl-S saves, q quits.\n  - Mouse: click tabs, click fields, scroll within a section, click boolean values to toggle.\n"
     );
 }
 
@@ -945,10 +953,10 @@ fn main() -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let result = run_app(stdout);
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
     result
 }
 
@@ -962,10 +970,14 @@ fn run_app(stdout: Stdout) -> io::Result<()> {
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }
-        if let Event::Key(key) = event::read()? {
-            if handle_key(&mut app, key)? {
-                break;
+        match event::read()? {
+            Event::Key(key) => {
+                if handle_key(&mut app, key)? {
+                    break;
+                }
             }
+            Event::Mouse(mouse) => handle_mouse(&mut app, mouse)?,
+            _ => {}
         }
     }
 
@@ -1015,72 +1027,180 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
     Ok(false)
 }
 
-fn draw(frame: &mut Frame, app: &App) {
+fn handle_mouse(app: &mut App, mouse: MouseEvent) -> io::Result<()> {
+    let (width, height) = crossterm::terminal::size()?;
+    let layout = compute_layout(Rect::new(0, 0, width, height));
+    let column_x = mouse.column;
+    let row_y = mouse.row;
+
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            app.field_index = (app.field_index + 1).min(app.fields().len().saturating_sub(1));
+        }
+        MouseEventKind::ScrollUp => {
+            app.field_index = app.field_index.saturating_sub(1);
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if point_in_rect(layout.outer[0], column_x, row_y) {
+                let titles = Section::all();
+                let tab_width = (layout.outer[0].width.max(1) / titles.len() as u16).max(1);
+                let idx = ((column_x.saturating_sub(layout.outer[0].x)) / tab_width) as usize;
+                app.section = idx.min(titles.len().saturating_sub(1));
+                app.field_index = 0;
+                return Ok(());
+            }
+
+            if point_in_rect(layout.body[0], column_x, row_y) {
+                let local_row = row_y.saturating_sub(layout.body[0].y + 1) as usize;
+                if local_row < app.fields().len() {
+                    app.field_index = local_row;
+                    if app.current_mut().bool_field {
+                        let current = app.current_mut().as_bool();
+                        app.current_mut().value = if current { "false" } else { "true" }.into();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn point_in_rect(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+}
+
+fn compute_layout(area: Rect) -> UiLayout {
     let outer = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(10),
-        Constraint::Length(4),
+        Constraint::Length(5),
     ])
-    .split(frame.area());
+    .split(area)
+    .to_vec();
+    let body = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(outer[1])
+        .to_vec();
+    UiLayout { outer, body }
+}
+
+fn draw(frame: &mut Frame, app: &App) {
+    let layout = compute_layout(frame.area());
 
     let titles: Vec<Line> = Section::all()
         .iter()
-        .map(|s| Line::from(s.title()))
+        .map(|s| Line::from(Span::styled(
+            s.title(),
+            Style::default().fg(Color::Black).bg(Color::Rgb(224, 196, 91)),
+        )))
         .collect();
     let tabs = Tabs::new(titles)
         .select(app.section)
-        .block(Block::default().borders(Borders::ALL).title("yggcli"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(
+                    "yggcli",
+                    Style::default()
+                        .fg(Color::Rgb(255, 230, 140))
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_style(Style::default().fg(Color::Rgb(96, 128, 255))),
+        )
         .highlight_style(
             Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+                .fg(Color::Black)
+                .bg(Color::Rgb(133, 239, 163))
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         );
-    frame.render_widget(tabs, outer[0]);
+    frame.render_widget(tabs, layout.outer[0]);
 
     let fields = app.fields();
     let lines: Vec<Line> = fields
         .iter()
         .enumerate()
         .map(|(idx, field)| {
-            let prefix = if idx == app.field_index { ">" } else { " " };
+            let selected = idx == app.field_index;
             let value = if field.bool_field {
                 format!("[{}]", field.value)
             } else {
                 field.value.clone()
             };
-            Line::from(format!("{prefix} {:<22} {}", field.label, value))
+            Line::from(vec![
+                Span::styled(
+                    if selected { "> " } else { "  " },
+                    Style::default().fg(Color::Rgb(255, 230, 140)),
+                ),
+                Span::styled(
+                    format!("{:<22}", field.label),
+                    Style::default()
+                        .fg(if selected {
+                            Color::Rgb(133, 239, 163)
+                        } else {
+                            Color::Rgb(132, 182, 244)
+                        })
+                        .add_modifier(if selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    value,
+                    Style::default().fg(if selected {
+                        Color::White
+                    } else {
+                        Color::Gray
+                    }),
+                ),
+            ])
         })
         .collect();
 
     let help = match app.section() {
-        Section::Workspace => "Choose where yggcli should write native config files for the server, client, and sync repos.",
-        Section::Yggdrasil => "Server ISO settings. Start with apt_proxy_mode=off for the first build. After the host is alive, follow the apt-proxy LXC recipe and switch to apt_proxy_mode=explicit with your proxy URL in ygg.local.toml.",
-        Section::Yggclient => "Endpoint profile settings. yggcli writes both yggclient.local.toml and config/profiles.local.env.",
-        Section::Yggsync => "Sync engine settings. Start with a few safe jobs before you widen the net.",
+        Section::Workspace => "Choose the workspace roots and repo names. yggcli writes plain-text configs into those repos so advanced users can still edit them by hand.",
+        Section::Yggdrasil => "Server ISO settings. First server build: keep apt_proxy_mode=off. After the host is alive, follow the apt-proxy LXC recipe in yggdocs and then switch to apt_proxy_mode=explicit for faster later builds.",
+        Section::Yggclient => "Endpoint profile settings. yggcli writes both yggclient.local.toml and config/profiles.local.env so existing scripts and hand-edited setups keep working.",
+        Section::Yggsync => "Sync engine settings. Start with a narrow scope. Notes first, then camera roll, then screenshots. Wider sync is easy later; data recovery is not.",
     };
 
-    let body = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(outer[1]);
     let fields_widget = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(app.section().title()),
+                .title(app.section().title())
+                .border_style(Style::default().fg(Color::Rgb(96, 128, 255))),
         )
         .wrap(Wrap { trim: false });
-    frame.render_widget(fields_widget, body[0]);
+    frame.render_widget(fields_widget, layout.body[0]);
 
     let note = Paragraph::new(help)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Operator Note"),
+                .title("Operator Note")
+                .border_style(Style::default().fg(Color::Rgb(224, 196, 91))),
         )
         .wrap(Wrap { trim: true });
-    frame.render_widget(note, body[1]);
+    frame.render_widget(note, layout.body[1]);
 
-    let status = Paragraph::new(app.status.as_str())
-        .block(Block::default().borders(Borders::ALL).title("Status"))
+    let footer = vec![
+        Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::Rgb(255, 230, 140)).add_modifier(Modifier::BOLD)),
+            Span::raw(app.status.as_str()),
+        ]),
+        Line::from("Examples: yggcli --bootstrap --write-defaults | yggcli --workspace ~/gh --build-iso --profile server"),
+        Line::from("Mouse: click tabs/fields, scroll to move. Keyboard: Tab, Shift-Tab, Up/Down, Enter, Ctrl-S, q."),
+    ];
+    let status = Paragraph::new(footer)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Help")
+                .border_style(Style::default().fg(Color::Rgb(133, 239, 163))),
+        )
         .wrap(Wrap { trim: true });
-    frame.render_widget(status, outer[2]);
+    frame.render_widget(Clear, layout.outer[2]);
+    frame.render_widget(status, layout.outer[2]);
 }
