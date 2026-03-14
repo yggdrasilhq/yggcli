@@ -5,7 +5,7 @@ use std::{
     process::Command,
     time::Duration,
 };
-
+use serde::{Deserialize, Serialize};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -16,7 +16,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs, Wrap},
     Terminal,
 };
-use serde::Serialize;
 
 const DEFAULT_WORKSPACE: &str = "/root/gh";
 const DEFAULT_REPO_BASE: &str = "https://github.com/yggdrasilhq";
@@ -28,6 +27,54 @@ const ECOSYSTEM_REPOS: &[&str] = &[
     "yggdocs",
     "yggterm",
 ];
+const ANDROID_REPOS: &[&str] = &["yggcli", "yggclient", "yggsync", "yggdocs"];
+
+#[derive(Clone, Debug)]
+struct Platform {
+    os: String,
+    arch: String,
+    is_android: bool,
+    is_termux: bool,
+}
+
+impl Platform {
+    fn detect() -> Self {
+        let prefix = env::var("PREFIX").unwrap_or_default();
+        let termux_files = Path::new("/data/data/com.termux/files/usr/bin/bash").exists();
+        let is_termux = prefix.contains("com.termux") || termux_files;
+        let is_android = env::consts::OS == "android" || is_termux;
+
+        Self {
+            os: env::consts::OS.into(),
+            arch: env::consts::ARCH.into(),
+            is_android,
+            is_termux,
+        }
+    }
+
+    fn supports_host_builds(&self) -> bool {
+        !self.is_android
+    }
+
+    fn repos(&self) -> &'static [&'static str] {
+        if self.is_android {
+            ANDROID_REPOS
+        } else {
+            ECOSYSTEM_REPOS
+        }
+    }
+
+    fn label(&self) -> String {
+        let flavor = if self.is_termux {
+            "termux"
+        } else if self.is_android {
+            "android"
+        } else {
+            "standard"
+        };
+        format!("{}/{}/{}", self.os, self.arch, flavor)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -57,7 +104,7 @@ impl Section {
     }
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct YggdrasilConfig {
     build_profile: String,
     enable_qemu_smoke: bool,
@@ -78,14 +125,14 @@ struct YggdrasilConfig {
     apt_proxy_bypass_host: String,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct IdentityConfig {
     profile_name: String,
     user_name: String,
     user_home: String,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct NetworkConfig {
     ssh_host: String,
     ssh_user: String,
@@ -93,21 +140,21 @@ struct NetworkConfig {
     apt_https_proxy: String,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct SyncConfig {
     enable_yggsync: bool,
     yggsync_repo: String,
     yggsync_config: String,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct ServicesConfig {
     install_desktop_timer: bool,
     install_shift_sync: bool,
     install_kmonad: bool,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct YggclientConfig {
     identity: IdentityConfig,
     network: NetworkConfig,
@@ -115,7 +162,7 @@ struct YggclientConfig {
     services: ServicesConfig,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct YggsyncConfig {
     rclone_binary: String,
     rclone_config: String,
@@ -124,7 +171,7 @@ struct YggsyncConfig {
     jobs: Vec<YggsyncJob>,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct YggsyncJob {
     name: String,
     description: String,
@@ -206,7 +253,8 @@ impl Default for App {
 
 impl App {
     fn with_workspace(root: &str) -> Self {
-        Self {
+        let platform = Platform::detect();
+        let mut app = Self {
             section: 0,
             field_index: 0,
             workspace: vec![
@@ -262,6 +310,169 @@ impl App {
                 Field::text("screenshots_remote", "nas:users/alice/media/screenshots"),
             ],
             status: "Tab: switch section | Up/Down: move | Type: edit | Enter: toggle bool | Ctrl-S: save | q: quit".into(),
+        };
+
+        if platform.is_android {
+            app.yggclient = vec![
+                Field::text("profile_name", "android"),
+                Field::text("user_name", "termux"),
+                Field::text("user_home", "$HOME"),
+                Field::text("ssh_host", "example-host"),
+                Field::text("ssh_user", "alice"),
+                Field::text("apt_http_proxy", ""),
+                Field::text("apt_https_proxy", ""),
+                Field::boolean("enable_yggsync", true),
+                Field::text("yggsync_repo", "https://github.com/yggdrasilhq/yggsync"),
+                Field::text("yggsync_config", "~/.config/ygg_sync.toml"),
+                Field::boolean("install_desktop_timer", false),
+                Field::boolean("install_shift_sync", false),
+                Field::boolean("install_kmonad", false),
+            ];
+            app.yggsync = vec![
+                Field::text("rclone_binary", "rclone"),
+                Field::text("rclone_config", "~/.config/rclone/rclone.conf"),
+                Field::text("lock_file", "~/.local/state/yggsync.lock"),
+                Field::text("notes_local", "~/storage/shared/Documents/obsidian"),
+                Field::text("notes_remote", "nas:users/alice/obsidian"),
+                Field::text("camera_local", "~/storage/shared/DCIM"),
+                Field::text("camera_remote", "nas:users/alice/media/dcim"),
+                Field::text("screenshots_local", "~/storage/shared/Pictures/Screenshots"),
+                Field::text("screenshots_remote", "nas:users/alice/media/screenshots"),
+            ];
+        }
+
+        app.load_existing_configs(root, &platform);
+
+        app
+    }
+
+    fn load_existing_configs(&mut self, root: &str, platform: &Platform) {
+        let root = PathBuf::from(root);
+        if platform.supports_host_builds() {
+            self.load_yggdrasil_config(&root.join("yggdrasil/ygg.local.toml"));
+        }
+        self.load_yggclient_config(&root.join("yggclient/yggclient.local.toml"));
+        self.load_yggsync_config(&root.join("yggsync/ygg_sync.local.toml"));
+    }
+
+    fn load_yggdrasil_config(&mut self, path: &Path) {
+        let Ok(raw) = fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(cfg) = toml::from_str::<YggdrasilConfig>(&raw) else {
+            return;
+        };
+        Self::set_field(&mut self.yggdrasil, "build_profile", cfg.build_profile);
+        Self::set_bool_field(
+            &mut self.yggdrasil,
+            "enable_qemu_smoke",
+            cfg.enable_qemu_smoke,
+        );
+        Self::set_field(&mut self.yggdrasil, "setup_mode", cfg.setup_mode);
+        Self::set_bool_field(&mut self.yggdrasil, "embed_ssh_keys", cfg.embed_ssh_keys);
+        Self::set_field(
+            &mut self.yggdrasil,
+            "ssh_authorized_keys_file",
+            cfg.ssh_authorized_keys_file,
+        );
+        Self::set_field(&mut self.yggdrasil, "hostname", cfg.hostname);
+        Self::set_field(&mut self.yggdrasil, "net_mode", cfg.net_mode);
+        Self::set_field(&mut self.yggdrasil, "lxc_parent_if", cfg.lxc_parent_if);
+        Self::set_field(&mut self.yggdrasil, "macvlan_cidr", cfg.macvlan_cidr);
+        Self::set_field(&mut self.yggdrasil, "macvlan_route", cfg.macvlan_route);
+        Self::set_field(&mut self.yggdrasil, "static_iface", cfg.static_iface);
+        Self::set_field(&mut self.yggdrasil, "static_ip", cfg.static_ip);
+        Self::set_field(&mut self.yggdrasil, "static_gateway", cfg.static_gateway);
+        Self::set_field(&mut self.yggdrasil, "static_dns", cfg.static_dns);
+        Self::set_field(&mut self.yggdrasil, "apt_http_proxy", cfg.apt_http_proxy);
+        Self::set_field(&mut self.yggdrasil, "apt_https_proxy", cfg.apt_https_proxy);
+        Self::set_field(
+            &mut self.yggdrasil,
+            "apt_proxy_bypass_host",
+            cfg.apt_proxy_bypass_host,
+        );
+    }
+
+    fn load_yggclient_config(&mut self, path: &Path) {
+        let Ok(raw) = fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(cfg) = toml::from_str::<YggclientConfig>(&raw) else {
+            return;
+        };
+        Self::set_field(
+            &mut self.yggclient,
+            "profile_name",
+            cfg.identity.profile_name,
+        );
+        Self::set_field(&mut self.yggclient, "user_name", cfg.identity.user_name);
+        Self::set_field(&mut self.yggclient, "user_home", cfg.identity.user_home);
+        Self::set_field(&mut self.yggclient, "ssh_host", cfg.network.ssh_host);
+        Self::set_field(&mut self.yggclient, "ssh_user", cfg.network.ssh_user);
+        Self::set_field(
+            &mut self.yggclient,
+            "apt_http_proxy",
+            cfg.network.apt_http_proxy,
+        );
+        Self::set_field(
+            &mut self.yggclient,
+            "apt_https_proxy",
+            cfg.network.apt_https_proxy,
+        );
+        Self::set_bool_field(
+            &mut self.yggclient,
+            "enable_yggsync",
+            cfg.sync.enable_yggsync,
+        );
+        Self::set_field(&mut self.yggclient, "yggsync_repo", cfg.sync.yggsync_repo);
+        Self::set_field(
+            &mut self.yggclient,
+            "yggsync_config",
+            cfg.sync.yggsync_config,
+        );
+        Self::set_bool_field(
+            &mut self.yggclient,
+            "install_desktop_timer",
+            cfg.services.install_desktop_timer,
+        );
+        Self::set_bool_field(
+            &mut self.yggclient,
+            "install_shift_sync",
+            cfg.services.install_shift_sync,
+        );
+        Self::set_bool_field(
+            &mut self.yggclient,
+            "install_kmonad",
+            cfg.services.install_kmonad,
+        );
+    }
+
+    fn load_yggsync_config(&mut self, path: &Path) {
+        let Ok(raw) = fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(cfg) = toml::from_str::<YggsyncConfig>(&raw) else {
+            return;
+        };
+        Self::set_field(&mut self.yggsync, "rclone_binary", cfg.rclone_binary);
+        Self::set_field(&mut self.yggsync, "rclone_config", cfg.rclone_config);
+        Self::set_field(&mut self.yggsync, "lock_file", cfg.lock_file);
+        for job in cfg.jobs {
+            match job.name.as_str() {
+                "notes" | "obsidian" => {
+                    Self::set_field(&mut self.yggsync, "notes_local", job.local);
+                    Self::set_field(&mut self.yggsync, "notes_remote", job.remote);
+                }
+                "camera-roll" | "dcim" => {
+                    Self::set_field(&mut self.yggsync, "camera_local", job.local);
+                    Self::set_field(&mut self.yggsync, "camera_remote", job.remote);
+                }
+                "screenshots" => {
+                    Self::set_field(&mut self.yggsync, "screenshots_local", job.local);
+                    Self::set_field(&mut self.yggsync, "screenshots_remote", job.remote);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -303,7 +514,7 @@ impl App {
         self.field_index = 0;
     }
 
-    fn save(&self, force: bool) -> io::Result<SaveReport> {
+    fn save(&self, force: bool, platform: &Platform) -> io::Result<SaveReport> {
         let root = PathBuf::from(self.get(&self.workspace, "workspace_root"));
         let server_repo = root.join(self.get(&self.workspace, "server_repo"));
         let client_repo = root.join(self.get(&self.workspace, "client_repo"));
@@ -357,17 +568,33 @@ impl App {
             rclone_binary: self.get(&self.yggsync, "rclone_binary"),
             rclone_config: self.get(&self.yggsync, "rclone_config"),
             lock_file: self.get(&self.yggsync, "lock_file"),
-            default_flags: vec![
-                "--fast-list".into(),
-                "--use-json-log".into(),
-                "--stats=30s".into(),
-                "--transfers=4".into(),
-            ],
+            default_flags: if platform.is_android {
+                vec![
+                    "--use-json-log".into(),
+                    "--stats=120s".into(),
+                    "--transfers=1".into(),
+                    "--checkers=2".into(),
+                ]
+            } else {
+                vec![
+                    "--use-json-log".into(),
+                    "--stats=120s".into(),
+                    "--transfers=2".into(),
+                    "--checkers=4".into(),
+                ]
+            },
             jobs: vec![
                 YggsyncJob {
-                    name: "notes".into(),
-                    description: "Keep the working notes tree in sync between laptop and NAS"
-                        .into(),
+                    name: if platform.is_android {
+                        "obsidian".into()
+                    } else {
+                        "notes".into()
+                    },
+                    description: if platform.is_android {
+                        "Keep the working Obsidian vault in sync between phone and NAS".into()
+                    } else {
+                        "Keep the working notes tree in sync between laptop and NAS".into()
+                    },
                     r#type: "bisync".into(),
                     local: self.get(&self.yggsync, "notes_local"),
                     remote: self.get(&self.yggsync, "notes_remote"),
@@ -375,13 +602,30 @@ impl App {
                     resync_on_exit: Some(vec![7]),
                     resync_flags: Some(vec!["--resync".into()]),
                     exclude: Some(vec!["**/.obsidian/**".into(), "**/.trash/**".into()]),
+                    flags: vec![
+                        "--create-empty-src-dirs".into(),
+                        "--track-renames".into(),
+                        "--resilient".into(),
+                        "--recover".into(),
+                        "--conflict-loser".into(),
+                        "pathname".into(),
+                        "--max-delete".into(),
+                        "90".into(),
+                    ],
                     ..Default::default()
                 },
                 YggsyncJob {
-                    name: "camera-roll".into(),
-                    description:
+                    name: if platform.is_android {
+                        "dcim".into()
+                    } else {
+                        "camera-roll".into()
+                    },
+                    description: if platform.is_android {
+                        "Upload phone camera media first, then prune old locals after remote confirmation".into()
+                    } else {
                         "Upload camera media first, then prune old locals after remote confirmation"
-                            .into(),
+                            .into()
+                    },
                     r#type: "retained_copy".into(),
                     local: self.get(&self.yggsync, "camera_local"),
                     remote: self.get(&self.yggsync, "camera_remote"),
@@ -407,31 +651,46 @@ impl App {
             written: Vec::new(),
             skipped: Vec::new(),
         };
-        write_file(
-            &server_repo.join("ygg.local.toml"),
-            &toml::to_string_pretty(&yggdrasil).unwrap(),
-            force,
-            &mut report,
-        )?;
-        write_file(
-            &client_repo.join("yggclient.local.toml"),
-            &toml::to_string_pretty(&yggclient).unwrap(),
-            force,
-            &mut report,
-        )?;
-        fs::create_dir_all(client_repo.join("config"))?;
-        write_file(
-            &client_repo.join("config/profiles.local.env"),
-            &self.render_client_env(&yggclient),
-            force,
-            &mut report,
-        )?;
-        write_file(
-            &sync_repo.join("ygg_sync.local.toml"),
-            &toml::to_string_pretty(&yggsync).unwrap(),
-            force,
-            &mut report,
-        )?;
+        if platform.supports_host_builds() && server_repo.exists() {
+            write_file(
+                &server_repo.join("ygg.local.toml"),
+                &toml::to_string_pretty(&yggdrasil).unwrap(),
+                force,
+                &mut report,
+            )?;
+        } else {
+            report.skipped.push(server_repo.join("ygg.local.toml"));
+        }
+
+        if client_repo.exists() {
+            write_file(
+                &client_repo.join("yggclient.local.toml"),
+                &toml::to_string_pretty(&yggclient).unwrap(),
+                force,
+                &mut report,
+            )?;
+            fs::create_dir_all(client_repo.join("config"))?;
+            write_file(
+                &client_repo.join("config/profiles.local.env"),
+                &self.render_client_env(&yggclient),
+                force,
+                &mut report,
+            )?;
+        } else {
+            report.skipped.push(client_repo.join("yggclient.local.toml"));
+            report.skipped.push(client_repo.join("config/profiles.local.env"));
+        }
+
+        if sync_repo.exists() {
+            write_file(
+                &sync_repo.join("ygg_sync.local.toml"),
+                &toml::to_string_pretty(&yggsync).unwrap(),
+                force,
+                &mut report,
+            )?;
+        } else {
+            report.skipped.push(sync_repo.join("ygg_sync.local.toml"));
+        }
         Ok(report)
     }
 
@@ -468,6 +727,16 @@ impl App {
             .find(|f| f.label == key)
             .map(|f| f.as_bool())
             .unwrap_or(false)
+    }
+
+    fn set_field(fields: &mut [Field], key: &str, value: String) {
+        if let Some(field) = fields.iter_mut().find(|f| f.label == key) {
+            field.value = value;
+        }
+    }
+
+    fn set_bool_field(fields: &mut [Field], key: &str, value: bool) {
+        Self::set_field(fields, key, if value { "true" } else { "false" }.into());
     }
 }
 
@@ -542,9 +811,9 @@ fn run_cmd(cmd: &mut Command) -> io::Result<()> {
     }
 }
 
-fn bootstrap_repos(workspace_root: &Path, repo_base: &str) -> io::Result<()> {
+fn bootstrap_repos(workspace_root: &Path, repo_base: &str, platform: &Platform) -> io::Result<()> {
     fs::create_dir_all(workspace_root)?;
-    for repo in ECOSYSTEM_REPOS {
+    for repo in platform.repos() {
         let target = workspace_root.join(repo);
         if target.exists() {
             continue;
@@ -555,7 +824,18 @@ fn bootstrap_repos(workspace_root: &Path, repo_base: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn run_build(workspace_root: &Path, profile: &str, skip_smoke: bool) -> io::Result<()> {
+fn run_build(
+    workspace_root: &Path,
+    profile: &str,
+    skip_smoke: bool,
+    platform: &Platform,
+) -> io::Result<()> {
+    if !platform.supports_host_builds() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "yggdrasil ISO builds are disabled on Android/Termux hosts",
+        ));
+    }
     let repo = workspace_root.join("yggdrasil");
     let mut cmd = Command::new("./mkconfig.sh");
     cmd.current_dir(repo)
@@ -569,7 +849,18 @@ fn run_build(workspace_root: &Path, profile: &str, skip_smoke: bool) -> io::Resu
     run_cmd(&mut cmd)
 }
 
-fn run_smoke(workspace_root: &Path, profile: &str, with_qemu: bool) -> io::Result<()> {
+fn run_smoke(
+    workspace_root: &Path,
+    profile: &str,
+    with_qemu: bool,
+    platform: &Platform,
+) -> io::Result<()> {
+    if !platform.supports_host_builds() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "yggdrasil smoke benches are disabled on Android/Termux hosts",
+        ));
+    }
     let repo = workspace_root.join("yggdrasil");
     let mut cmd = Command::new("./tests/smoke/run.sh");
     cmd.current_dir(repo)
@@ -591,20 +882,31 @@ fn run_smoke(workspace_root: &Path, profile: &str, with_qemu: bool) -> io::Resul
 
 fn main() -> io::Result<()> {
     let opts = parse_cli().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let platform = Platform::detect();
     if opts.help {
         usage();
         return Ok(());
     }
 
+    if (opts.build_iso || opts.smoke) && !platform.supports_host_builds() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "platform {} does not support yggdrasil build or smoke actions",
+                platform.label()
+            ),
+        ));
+    }
+
     if has_non_interactive_action(&opts) {
         let workspace_root = PathBuf::from(&opts.workspace_root);
         if opts.bootstrap {
-            bootstrap_repos(&workspace_root, &opts.repo_base)?;
+            bootstrap_repos(&workspace_root, &opts.repo_base, &platform)?;
         }
 
-        let app = App::with_workspace(&opts.workspace_root);
+    let app = App::with_workspace(&opts.workspace_root);
         if opts.write_defaults || opts.build_iso || opts.smoke {
-            let report = app.save(opts.force)?;
+            let report = app.save(opts.force, &platform)?;
             if !report.written.is_empty() {
                 eprintln!(
                     "written: {}",
@@ -630,10 +932,10 @@ fn main() -> io::Result<()> {
         }
 
         if opts.build_iso {
-            run_build(&workspace_root, &opts.profile, opts.skip_smoke)?;
+            run_build(&workspace_root, &opts.profile, opts.skip_smoke, &platform)?;
         }
         if opts.smoke {
-            run_smoke(&workspace_root, &opts.profile, opts.with_qemu)?;
+            run_smoke(&workspace_root, &opts.profile, opts.with_qemu, &platform)?;
         }
         return Ok(());
     }
@@ -687,8 +989,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
                 app.current_mut().value.pop();
             }
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => match app.save(true)
-        {
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let platform = Platform::detect();
+            match app.save(true, &platform) {
             Ok(report) => {
                 app.status = format!(
                     "Saved {} file(s), skipped {}",
@@ -697,7 +1000,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
                 );
             }
             Err(err) => app.status = format!("Save failed: {err}"),
-        },
+            }
+        }
         KeyCode::Char(ch) => {
             if !app.current_mut().bool_field && !key.modifiers.contains(KeyModifiers::CONTROL) {
                 app.current_mut().value.push(ch);
