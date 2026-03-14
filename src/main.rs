@@ -604,7 +604,6 @@ impl App {
                     exclude: Some(vec!["**/.obsidian/**".into(), "**/.trash/**".into()]),
                     flags: vec![
                         "--create-empty-src-dirs".into(),
-                        "--track-renames".into(),
                         "--resilient".into(),
                         "--recover".into(),
                         "--conflict-loser".into(),
