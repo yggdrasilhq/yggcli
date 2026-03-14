@@ -1,0 +1,16 @@
+{
+  "name": "@ygg/cli",
+  "version": "0.1.0",
+  "description": "Bootstrap launcher for the Yggdrasil ecosystem CLI",
+  "bin": {
+    "ygg": "bin/ygg.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "license": "Apache-2.0",
+  "type": "commonjs"
+}

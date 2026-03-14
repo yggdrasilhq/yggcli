@@ -1,7 +1,8 @@
 use std::{
-    fs,
+    env, fs,
     io::{self, Stdout},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::Command,
     time::Duration,
 };
 
@@ -16,6 +17,17 @@ use ratatui::{
     Terminal,
 };
 use serde::Serialize;
+
+const DEFAULT_WORKSPACE: &str = "/root/gh";
+const DEFAULT_REPO_BASE: &str = "https://github.com/yggdrasilhq";
+const ECOSYSTEM_REPOS: &[&str] = &[
+    "yggdrasil",
+    "yggcli",
+    "yggclient",
+    "yggsync",
+    "yggdocs",
+    "yggterm",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -136,11 +148,19 @@ struct Field {
 
 impl Field {
     fn text(label: &'static str, value: impl Into<String>) -> Self {
-        Self { label, value: value.into(), bool_field: false }
+        Self {
+            label,
+            value: value.into(),
+            bool_field: false,
+        }
     }
 
     fn boolean(label: &'static str, value: bool) -> Self {
-        Self { label, value: if value { "true" } else { "false" }.into(), bool_field: true }
+        Self {
+            label,
+            value: if value { "true" } else { "false" }.into(),
+            bool_field: true,
+        }
     }
 
     fn as_bool(&self) -> bool {
@@ -158,13 +178,39 @@ struct App {
     status: String,
 }
 
+struct SaveReport {
+    written: Vec<PathBuf>,
+    skipped: Vec<PathBuf>,
+}
+
+#[derive(Default)]
+struct CliOptions {
+    workspace_root: String,
+    repo_base: String,
+    bootstrap: bool,
+    write_defaults: bool,
+    force: bool,
+    build_iso: bool,
+    smoke: bool,
+    profile: String,
+    skip_smoke: bool,
+    with_qemu: bool,
+    help: bool,
+}
+
 impl Default for App {
     fn default() -> Self {
+        Self::with_workspace(DEFAULT_WORKSPACE)
+    }
+}
+
+impl App {
+    fn with_workspace(root: &str) -> Self {
         Self {
             section: 0,
             field_index: 0,
             workspace: vec![
-                Field::text("workspace_root", "/root/gh"),
+                Field::text("workspace_root", root),
                 Field::text("docs_repo", "yggdocs"),
                 Field::text("server_repo", "yggdrasil"),
                 Field::text("client_repo", "yggclient"),
@@ -172,7 +218,7 @@ impl Default for App {
             ],
             yggdrasil: vec![
                 Field::text("build_profile", "both"),
-                Field::boolean("enable_qemu_smoke", true),
+                Field::boolean("enable_qemu_smoke", false),
                 Field::text("setup_mode", "recommended"),
                 Field::boolean("embed_ssh_keys", true),
                 Field::text("ssh_authorized_keys_file", "/root/.ssh/authorized_keys"),
@@ -218,9 +264,7 @@ impl Default for App {
             status: "Tab: switch section | Up/Down: move | Type: edit | Enter: toggle bool | Ctrl-S: save | q: quit".into(),
         }
     }
-}
 
-impl App {
     fn section(&self) -> Section {
         Section::all()[self.section]
     }
@@ -259,7 +303,7 @@ impl App {
         self.field_index = 0;
     }
 
-    fn save(&self) -> io::Result<Vec<PathBuf>> {
+    fn save(&self, force: bool) -> io::Result<SaveReport> {
         let root = PathBuf::from(self.get(&self.workspace, "workspace_root"));
         let server_repo = root.join(self.get(&self.workspace, "server_repo"));
         let client_repo = root.join(self.get(&self.workspace, "client_repo"));
@@ -322,7 +366,8 @@ impl App {
             jobs: vec![
                 YggsyncJob {
                     name: "notes".into(),
-                    description: "Keep the working notes tree in sync between laptop and NAS".into(),
+                    description: "Keep the working notes tree in sync between laptop and NAS"
+                        .into(),
                     r#type: "bisync".into(),
                     local: self.get(&self.yggsync, "notes_local"),
                     remote: self.get(&self.yggsync, "notes_remote"),
@@ -334,7 +379,9 @@ impl App {
                 },
                 YggsyncJob {
                     name: "camera-roll".into(),
-                    description: "Upload camera media first, then prune old locals after remote confirmation".into(),
+                    description:
+                        "Upload camera media first, then prune old locals after remote confirmation"
+                            .into(),
                     r#type: "retained_copy".into(),
                     local: self.get(&self.yggsync, "camera_local"),
                     remote: self.get(&self.yggsync, "camera_remote"),
@@ -356,20 +403,36 @@ impl App {
             ],
         };
 
-        let mut written = Vec::new();
-        fs::write(server_repo.join("ygg.local.toml"), toml::to_string_pretty(&yggdrasil).unwrap())?;
-        written.push(server_repo.join("ygg.local.toml"));
-
-        fs::write(client_repo.join("yggclient.local.toml"), toml::to_string_pretty(&yggclient).unwrap())?;
-        written.push(client_repo.join("yggclient.local.toml"));
-
+        let mut report = SaveReport {
+            written: Vec::new(),
+            skipped: Vec::new(),
+        };
+        write_file(
+            &server_repo.join("ygg.local.toml"),
+            &toml::to_string_pretty(&yggdrasil).unwrap(),
+            force,
+            &mut report,
+        )?;
+        write_file(
+            &client_repo.join("yggclient.local.toml"),
+            &toml::to_string_pretty(&yggclient).unwrap(),
+            force,
+            &mut report,
+        )?;
         fs::create_dir_all(client_repo.join("config"))?;
-        fs::write(client_repo.join("config/profiles.local.env"), self.render_client_env(&yggclient))?;
-        written.push(client_repo.join("config/profiles.local.env"));
-
-        fs::write(sync_repo.join("ygg_sync.local.toml"), toml::to_string_pretty(&yggsync).unwrap())?;
-        written.push(sync_repo.join("ygg_sync.local.toml"));
-        Ok(written)
+        write_file(
+            &client_repo.join("config/profiles.local.env"),
+            &self.render_client_env(&yggclient),
+            force,
+            &mut report,
+        )?;
+        write_file(
+            &sync_repo.join("ygg_sync.local.toml"),
+            &toml::to_string_pretty(&yggsync).unwrap(),
+            force,
+            &mut report,
+        )?;
+        Ok(report)
     }
 
     fn render_client_env(&self, cfg: &YggclientConfig) -> String {
@@ -392,15 +455,189 @@ impl App {
     }
 
     fn get(&self, fields: &[Field], key: &str) -> String {
-        fields.iter().find(|f| f.label == key).map(|f| f.value.clone()).unwrap_or_default()
+        fields
+            .iter()
+            .find(|f| f.label == key)
+            .map(|f| f.value.clone())
+            .unwrap_or_default()
     }
 
     fn get_bool(&self, fields: &[Field], key: &str) -> bool {
-        fields.iter().find(|f| f.label == key).map(|f| f.as_bool()).unwrap_or(false)
+        fields
+            .iter()
+            .find(|f| f.label == key)
+            .map(|f| f.as_bool())
+            .unwrap_or(false)
     }
 }
 
+fn write_file(path: &Path, contents: &str, force: bool, report: &mut SaveReport) -> io::Result<()> {
+    if path.exists() && !force {
+        report.skipped.push(path.to_path_buf());
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, contents)?;
+    report.written.push(path.to_path_buf());
+    Ok(())
+}
+
+fn usage() {
+    println!(
+        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]              Run non-interactive workflow\n\nOptions:\n  --workspace PATH              Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL               Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                   Clone missing ecosystem repos\n  --write-defaults              Write local config files using sensible defaults\n  --force                       Overwrite existing local config files\n  --build-iso                   Run yggdrasil build after config generation\n  --smoke                       Run smoke bench explicitly after build/config\n  --profile server|kde|both     Profile for build/smoke (default: both)\n  --skip-smoke                  Skip smoke inside mkconfig build step\n  --with-qemu                   Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                    Show this help\n"
+    );
+}
+
+fn parse_cli() -> Result<CliOptions, String> {
+    let mut opts = CliOptions {
+        workspace_root: DEFAULT_WORKSPACE.into(),
+        repo_base: DEFAULT_REPO_BASE.into(),
+        profile: "both".into(),
+        ..Default::default()
+    };
+
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--workspace" => {
+                opts.workspace_root = args.next().ok_or("--workspace requires a value")?
+            }
+            "--repo-base" => opts.repo_base = args.next().ok_or("--repo-base requires a value")?,
+            "--bootstrap" => opts.bootstrap = true,
+            "--write-defaults" => opts.write_defaults = true,
+            "--force" => opts.force = true,
+            "--build-iso" => opts.build_iso = true,
+            "--smoke" => opts.smoke = true,
+            "--profile" => opts.profile = args.next().ok_or("--profile requires a value")?,
+            "--skip-smoke" => opts.skip_smoke = true,
+            "--with-qemu" => opts.with_qemu = true,
+            "-h" | "--help" => opts.help = true,
+            other => return Err(format!("unknown argument: {other}")),
+        }
+    }
+
+    match opts.profile.as_str() {
+        "server" | "kde" | "both" => {}
+        _ => return Err(format!("invalid profile: {}", opts.profile)),
+    }
+
+    Ok(opts)
+}
+
+fn has_non_interactive_action(opts: &CliOptions) -> bool {
+    opts.bootstrap || opts.write_defaults || opts.build_iso || opts.smoke || opts.help
+}
+
+fn run_cmd(cmd: &mut Command) -> io::Result<()> {
+    let status = cmd.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("command failed with status {status}"),
+        ))
+    }
+}
+
+fn bootstrap_repos(workspace_root: &Path, repo_base: &str) -> io::Result<()> {
+    fs::create_dir_all(workspace_root)?;
+    for repo in ECOSYSTEM_REPOS {
+        let target = workspace_root.join(repo);
+        if target.exists() {
+            continue;
+        }
+        let url = format!("{repo_base}/{repo}.git");
+        run_cmd(Command::new("git").arg("clone").arg(url).arg(&target))?;
+    }
+    Ok(())
+}
+
+fn run_build(workspace_root: &Path, profile: &str, skip_smoke: bool) -> io::Result<()> {
+    let repo = workspace_root.join("yggdrasil");
+    let mut cmd = Command::new("./mkconfig.sh");
+    cmd.current_dir(repo)
+        .arg("--config")
+        .arg("./ygg.local.toml")
+        .arg("--profile")
+        .arg(profile);
+    if skip_smoke {
+        cmd.arg("--skip-smoke");
+    }
+    run_cmd(&mut cmd)
+}
+
+fn run_smoke(workspace_root: &Path, profile: &str, with_qemu: bool) -> io::Result<()> {
+    let repo = workspace_root.join("yggdrasil");
+    let mut cmd = Command::new("./tests/smoke/run.sh");
+    cmd.current_dir(repo)
+        .arg("--profile")
+        .arg(profile)
+        .arg("--require-artifacts")
+        .arg("--with-iso-rootfs")
+        .arg("--artifacts-dir")
+        .arg("./artifacts")
+        .arg("--server-iso")
+        .arg("./artifacts/server-latest.iso")
+        .arg("--kde-iso")
+        .arg("./artifacts/kde-latest.iso");
+    if with_qemu {
+        cmd.arg("--with-qemu-boot");
+    }
+    run_cmd(&mut cmd)
+}
+
 fn main() -> io::Result<()> {
+    let opts = parse_cli().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    if opts.help {
+        usage();
+        return Ok(());
+    }
+
+    if has_non_interactive_action(&opts) {
+        let workspace_root = PathBuf::from(&opts.workspace_root);
+        if opts.bootstrap {
+            bootstrap_repos(&workspace_root, &opts.repo_base)?;
+        }
+
+        let app = App::with_workspace(&opts.workspace_root);
+        if opts.write_defaults || opts.build_iso || opts.smoke {
+            let report = app.save(opts.force)?;
+            if !report.written.is_empty() {
+                eprintln!(
+                    "written: {}",
+                    report
+                        .written
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            if !report.skipped.is_empty() {
+                eprintln!(
+                    "skipped existing: {}",
+                    report
+                        .skipped
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+
+        if opts.build_iso {
+            run_build(&workspace_root, &opts.profile, opts.skip_smoke)?;
+        }
+        if opts.smoke {
+            run_smoke(&workspace_root, &opts.profile, opts.with_qemu)?;
+        }
+        return Ok(());
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -436,7 +673,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
         KeyCode::Tab => app.next_section(),
         KeyCode::BackTab => app.previous_section(),
         KeyCode::Up => app.field_index = app.field_index.saturating_sub(1),
-        KeyCode::Down => app.field_index = (app.field_index + 1).min(app.fields().len().saturating_sub(1)),
+        KeyCode::Down => {
+            app.field_index = (app.field_index + 1).min(app.fields().len().saturating_sub(1))
+        }
         KeyCode::Enter => {
             if app.current_mut().bool_field {
                 let current = app.current_mut().as_bool();
@@ -448,18 +687,17 @@ fn handle_key(app: &mut App, key: KeyEvent) -> io::Result<bool> {
                 app.current_mut().value.pop();
             }
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            match app.save() {
-                Ok(paths) => {
-                    app.status = format!(
-                        "Saved {} files: {}",
-                        paths.len(),
-                        paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
-                    );
-                }
-                Err(err) => app.status = format!("Save failed: {err}"),
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => match app.save(true)
+        {
+            Ok(report) => {
+                app.status = format!(
+                    "Saved {} file(s), skipped {}",
+                    report.written.len(),
+                    report.skipped.len()
+                );
             }
-        }
+            Err(err) => app.status = format!("Save failed: {err}"),
+        },
         KeyCode::Char(ch) => {
             if !app.current_mut().bool_field && !key.modifiers.contains(KeyModifiers::CONTROL) {
                 app.current_mut().value.push(ch);
@@ -478,11 +716,18 @@ fn draw(frame: &mut Frame, app: &App) {
     ])
     .split(frame.area());
 
-    let titles: Vec<Line> = Section::all().iter().map(|s| Line::from(s.title())).collect();
+    let titles: Vec<Line> = Section::all()
+        .iter()
+        .map(|s| Line::from(s.title()))
+        .collect();
     let tabs = Tabs::new(titles)
         .select(app.section)
         .block(Block::default().borders(Borders::ALL).title("yggcli"))
-        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
     frame.render_widget(tabs, outer[0]);
 
     let fields = app.fields();
@@ -507,14 +752,23 @@ fn draw(frame: &mut Frame, app: &App) {
         Section::Yggsync => "Sync engine settings. Start with a few safe jobs before you widen the net.",
     };
 
-    let body = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).split(outer[1]);
+    let body = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(outer[1]);
     let fields_widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(app.section().title()))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(app.section().title()),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(fields_widget, body[0]);
 
     let note = Paragraph::new(help)
-        .block(Block::default().borders(Borders::ALL).title("Operator Note"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Operator Note"),
+        )
         .wrap(Wrap { trim: true });
     frame.render_widget(note, body[1]);
 
