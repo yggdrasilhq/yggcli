@@ -1,6 +1,6 @@
 [package]
 name = "yggcli"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Terminal UX for generating Yggdrasil ecosystem configuration."
 license = "Apache-2.0"

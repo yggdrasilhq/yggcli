@@ -37,8 +37,13 @@ function detectPlatform() {
   return { platform, arch };
 }
 
-function releaseUrl(platform, arch) {
-  return `${REPO.replace(/\/$/, "")}/releases/download/${VERSION}/yggcli-${platform}-${arch}`;
+function releaseUrls(platform, arch) {
+  const base = `${REPO.replace(/\/$/, "")}/releases/download/${VERSION}`;
+  const urls = [`${base}/yggcli-${platform}-${arch}`];
+  if (platform === "linux" && arch === "amd64") {
+    urls.push(`${base}/yggcli`);
+  }
+  return urls;
 }
 
 function ensureDir(dir) {
@@ -94,6 +99,20 @@ function buildFromSource() {
   return path.join(os.homedir(), ".local", "bin", "yggcli");
 }
 
+async function downloadFirst(urls, dest) {
+  let lastError;
+  for (const url of urls) {
+    try {
+      console.error(`[yggcli-npm] downloading ${url}`);
+      await download(url, dest);
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error("no release URL candidates succeeded");
+}
+
 async function main() {
   const { platform, arch } = detectPlatform();
   const cacheDir = path.join(CACHE_ROOT, VERSION);
@@ -101,10 +120,8 @@ async function main() {
   ensureDir(cacheDir);
 
   if (!fs.existsSync(binaryPath)) {
-    const url = releaseUrl(platform, arch);
     try {
-      console.error(`[yggcli-npm] downloading ${url}`);
-      await download(url, binaryPath);
+      await downloadFirst(releaseUrls(platform, arch), binaryPath);
       fs.chmodSync(binaryPath, 0o755);
     } catch (err) {
       console.error(`[yggcli-npm] release download unavailable: ${err.message}`);
