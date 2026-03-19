@@ -1,6 +1,6 @@
 {
   "name": "yggcli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "npx launcher for the Yggdrasil ecosystem CLI",
   "license": "Apache-2.0",
   "homepage": "https://github.com/yggdrasilhq/yggcli",

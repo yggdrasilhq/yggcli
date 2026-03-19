@@ -111,6 +111,7 @@ impl Section {
 struct YggdrasilConfig {
     build_profile: String,
     enable_qemu_smoke: bool,
+    with_nvidia: bool,
     setup_mode: String,
     apt_proxy_mode: String,
     embed_ssh_keys: bool,
@@ -277,6 +278,7 @@ impl App {
             yggdrasil: vec![
                 Field::text("build_profile", "both"),
                 Field::boolean("enable_qemu_smoke", false),
+                Field::boolean("with_nvidia", false),
                 Field::text("setup_mode", "recommended"),
                 Field::text("apt_proxy_mode", "off"),
                 Field::boolean("embed_ssh_keys", true),
@@ -379,6 +381,7 @@ impl App {
             "enable_qemu_smoke",
             cfg.enable_qemu_smoke,
         );
+        Self::set_bool_field(&mut self.yggdrasil, "with_nvidia", cfg.with_nvidia);
         Self::set_field(&mut self.yggdrasil, "setup_mode", cfg.setup_mode);
         Self::set_field(&mut self.yggdrasil, "apt_proxy_mode", cfg.apt_proxy_mode);
         Self::set_bool_field(&mut self.yggdrasil, "embed_ssh_keys", cfg.embed_ssh_keys);
@@ -535,6 +538,7 @@ impl App {
         let yggdrasil = YggdrasilConfig {
             build_profile: self.get(&self.yggdrasil, "build_profile"),
             enable_qemu_smoke: self.get_bool(&self.yggdrasil, "enable_qemu_smoke"),
+            with_nvidia: self.get_bool(&self.yggdrasil, "with_nvidia"),
             setup_mode: self.get(&self.yggdrasil, "setup_mode"),
             apt_proxy_mode: self.get(&self.yggdrasil, "apt_proxy_mode"),
             embed_ssh_keys: self.get_bool(&self.yggdrasil, "embed_ssh_keys"),
