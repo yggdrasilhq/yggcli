@@ -1,15 +1,15 @@
 # yggcli
 
-`yggcli` is the calm front door into the Yggdrasil ecosystem.
+`yggcli` is the guided front door into the Yggdrasil ecosystem.
 
-It exists for the moment when a user wants the power of `yggdrasil`, `yggclient`, and `yggsync`, but not the friction of remembering every knob, file path, and prerequisite on day one.
-It does not hide the system behind a private state database.
+It exists for the moment when someone wants the power of `yggdrasil`, `yggclient`, and `yggsync`, but not the early friction of memorizing every knob, file path, and prerequisite on day one.
+It does not invent a hidden control plane.
 It writes the real config files the ecosystem already uses, so the path from beginner to operator stays open.
 
-That is the point of `yggcli`:
+That is the job:
 
-- make the first run feel guided instead of hostile
-- make the second run feel familiar instead of mysterious
+- make the first run feel guided instead of sharp-edged
+- make the second run feel familiar instead of magical
 - keep the generated files plain, inspectable, and editable
 - stay optional for seasoned users who prefer to drive the repos directly
 
@@ -95,18 +95,14 @@ It gives you:
 
 ## Quick Start
 
-If you want the fastest path:
-
-```bash
-npx -y yggcli --help
-```
-
-If you prefer a direct installer:
+Today, the canonical install path is the GitHub release installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yggdrasilhq/yggcli/main/install.sh | bash
 yggcli --help
 ```
+
+That gives you the current released binary without needing Rust locally.
 
 For local development:
 
@@ -127,6 +123,12 @@ Example:
 ```bash
 yggcli --bootstrap --write-defaults
 yggcli --workspace ~/gh --build-iso --profile server
+```
+
+If you want to try the npm-style launcher path locally, it currently exists as the repo package and release launcher, not as a guaranteed public npm install name:
+
+```bash
+npx -y github:yggdrasilhq/yggcli --help
 ```
 
 ## What It Writes
@@ -217,8 +219,8 @@ Use this when:
 yggcli --workspace ~/gh \
   --set yggdrasil.hostname=mewmew \
   --set yggdrasil.net_mode=dhcp \
-  --set yggdrasil.macvlan_cidr=10.10.0.250/24 \
-  --set yggdrasil.macvlan_route=10.10.0.0/24 \
+  --set yggdrasil.static_dns="192.168.1.1 9.11.11.11" \
+  --set yggdrasil.with_nvidia=false \
   --build-iso --profile server
 ```
 
@@ -234,7 +236,7 @@ Use this when:
 yggcli --workspace ~/gh \
   --set yggclient.profile_name=laptop \
   --set yggclient.user_name=alice \
-  --set yggclient.ssh_host=example-host \
+  --set yggclient.ssh_host=mewmew \
   --set yggsync.notes_local=~/Documents/notes \
   --set yggsync.notes_remote=nas:users/alice/notes \
   --write-defaults --force
@@ -245,6 +247,19 @@ Use this when:
 - the server already exists
 - you are onboarding a second machine
 - you want the ecosystem config, not a host rebuild
+
+### 4. Android or Termux device
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yggdrasilhq/yggcli/main/install.sh | bash
+yggcli --bootstrap --write-defaults
+```
+
+Use this when:
+
+- you want to configure `yggclient` and `yggsync` on a phone
+- you want the safe defaults first
+- you do not want Android trying to do server-build work it should never do
 
 ## Non-Interactive Use
 
@@ -294,6 +309,27 @@ The non-interactive mode is there for disciplined work:
 - Android/Termux hosts do not run `yggdrasil` ISO builds or smoke benches.
 - Existing local config files are loaded first, so reruns behave like editing a live workspace.
 
+## Release Workflow
+
+`yggcli` is built from tagged releases with GitHub Actions.
+
+Primary workflow file:
+
+- `.github/workflows/release.yml`
+
+What it does:
+
+- runs tests
+- builds the Rust binary for Linux
+- attaches release assets to the GitHub release
+- keeps the release path aligned with `install.sh` and the JS launcher
+
+There is also a CI workflow:
+
+- `.github/workflows/ci.yml`
+
+That one exists to catch breakage on pushes and pull requests before a tag becomes a release.
+
 ## For Experienced Users
 
 You do not have to use `yggcli`.
@@ -319,6 +355,7 @@ If you already have a working mental model, use `yggcli` like a sharp utility:
 - Rust
 - ratatui
 - crossterm
+- GitHub Actions for release automation
 
 ## License
 
