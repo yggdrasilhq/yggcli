@@ -112,6 +112,7 @@ struct YggdrasilConfig {
     build_profile: String,
     enable_qemu_smoke: bool,
     with_nvidia: bool,
+    with_lts: bool,
     setup_mode: String,
     apt_proxy_mode: String,
     embed_ssh_keys: bool,
@@ -279,6 +280,7 @@ impl App {
                 Field::text("build_profile", "both"),
                 Field::boolean("enable_qemu_smoke", false),
                 Field::boolean("with_nvidia", false),
+                Field::boolean("with_lts", false),
                 Field::text("setup_mode", "recommended"),
                 Field::text("apt_proxy_mode", "off"),
                 Field::boolean("embed_ssh_keys", true),
@@ -382,6 +384,7 @@ impl App {
             cfg.enable_qemu_smoke,
         );
         Self::set_bool_field(&mut self.yggdrasil, "with_nvidia", cfg.with_nvidia);
+        Self::set_bool_field(&mut self.yggdrasil, "with_lts", cfg.with_lts);
         Self::set_field(&mut self.yggdrasil, "setup_mode", cfg.setup_mode);
         Self::set_field(&mut self.yggdrasil, "apt_proxy_mode", cfg.apt_proxy_mode);
         Self::set_bool_field(&mut self.yggdrasil, "embed_ssh_keys", cfg.embed_ssh_keys);
@@ -539,6 +542,7 @@ impl App {
             build_profile: self.get(&self.yggdrasil, "build_profile"),
             enable_qemu_smoke: self.get_bool(&self.yggdrasil, "enable_qemu_smoke"),
             with_nvidia: self.get_bool(&self.yggdrasil, "with_nvidia"),
+            with_lts: self.get_bool(&self.yggdrasil, "with_lts"),
             setup_mode: self.get(&self.yggdrasil, "setup_mode"),
             apt_proxy_mode: self.get(&self.yggdrasil, "apt_proxy_mode"),
             embed_ssh_keys: self.get_bool(&self.yggdrasil, "embed_ssh_keys"),
@@ -771,7 +775,7 @@ fn write_file(path: &Path, contents: &str, force: bool, report: &mut SaveReport)
 
 fn usage() {
     println!(
-        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]               Run non-interactive workflow\n\nOptions:\n  --workspace PATH               Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL                Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                    Clone missing ecosystem repos\n  --write-defaults               Write local config files using sensible defaults\n  --force                        Overwrite existing local config files\n  --set section.key=value        Override one field before save/build (repeatable)\n  --build-iso                    Run yggdrasil build after config generation\n  --smoke                        Run smoke bench explicitly after build/config\n  --profile server|kde|both      Profile for build/smoke (default: both)\n  --skip-smoke                   Skip smoke inside mkconfig build step\n  --with-qemu                    Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                     Show this help\n\nExamples:\n  yggcli --bootstrap --write-defaults\n  yggcli --workspace ~/gh --build-iso --profile server\n  yggcli --workspace ~/gh --smoke --profile kde --with-qemu\n  yggcli --workspace ~/gh --set yggdrasil.hostname=mewmew --set yggdrasil.net_mode=dhcp --build-iso --profile server\n\nGuidance:\n  - First server build: keep apt_proxy_mode=off.\n  - After the host is alive, follow the apt-proxy LXC recipe in yggdocs and switch to apt_proxy_mode=explicit.\n  - Android/Termux hosts can configure yggclient and yggsync, but they do not build yggdrasil ISOs.\n  - Non-interactive builds auto-use sudo -n when root privileges are required.\n\nTUI controls:\n  - Keyboard: Tab/Shift-Tab switch sections, Up/Down move, Enter toggles booleans, Ctrl-S saves, q quits.\n  - Mouse: click tabs, click fields, scroll within a section, click boolean values to toggle.\n"
+        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]               Run non-interactive workflow\n\nOptions:\n  --workspace PATH               Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL                Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                    Clone missing ecosystem repos\n  --write-defaults               Write local config files using sensible defaults\n  --force                        Overwrite existing local config files\n  --set section.key=value        Override one field before save/build (repeatable)\n  --build-iso                    Run yggdrasil build after config generation\n  --smoke                        Run smoke bench explicitly after build/config\n  --profile server|kde|both      Profile for build/smoke (default: both)\n  --skip-smoke                   Skip smoke inside mkconfig build step\n  --with-qemu                    Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                     Show this help\n\nExamples:\n  yggcli --bootstrap --write-defaults\n  yggcli --workspace ~/gh --build-iso --profile server\n  yggcli --workspace ~/gh --smoke --profile kde --with-qemu\n  yggcli --workspace ~/gh --set yggdrasil.hostname=mewmew --set yggdrasil.net_mode=dhcp --set yggdrasil.with_lts=false --build-iso --profile server\n\nGuidance:\n  - First server build: keep apt_proxy_mode=off.\n  - Keep yggdrasil.with_lts=false unless you intentionally need the compatibility-pinned kernel path.\n  - After the host is alive, follow the apt-proxy LXC recipe in yggdocs and switch to apt_proxy_mode=explicit.\n  - Android/Termux hosts can configure yggclient and yggsync, but they do not build yggdrasil ISOs.\n  - Non-interactive builds auto-use sudo -n when root privileges are required.\n\nTUI controls:\n  - Keyboard: Tab/Shift-Tab switch sections, Up/Down move, Enter toggles booleans, Ctrl-S saves, q quits.\n  - Mouse: click tabs, click fields, scroll within a section, click boolean values to toggle.\n"
     );
 }
 

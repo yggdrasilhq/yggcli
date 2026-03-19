@@ -198,6 +198,12 @@ This is deliberate.
 The first success should be understandable.
 Speed comes after trust.
 
+Kernel guidance:
+
+- keep `with_lts=false` for the normal sid kernel path
+- switch to `with_lts=true` only when you intentionally want the compatibility-pinned kernel path
+- that compatibility path exists for ABI-sensitive cases such as troublesome DKMS stacks
+
 ## Guided Examples
 
 ### 1. First server, minimum decisions
@@ -220,6 +226,7 @@ yggcli --workspace ~/gh \
   --set yggdrasil.hostname=mewmew \
   --set yggdrasil.net_mode=dhcp \
   --set yggdrasil.static_dns="192.168.1.1 9.11.11.11" \
+  --set yggdrasil.with_lts=false \
   --set yggdrasil.with_nvidia=false \
   --build-iso --profile server
 ```
