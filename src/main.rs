@@ -249,6 +249,7 @@ struct CliOptions {
     build_iso: bool,
     smoke: bool,
     profile: String,
+    sets: Vec<String>,
     skip_smoke: bool,
     with_qemu: bool,
     help: bool,
@@ -766,7 +767,7 @@ fn write_file(path: &Path, contents: &str, force: bool, report: &mut SaveReport)
 
 fn usage() {
     println!(
-        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]               Run non-interactive workflow\n\nOptions:\n  --workspace PATH               Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL                Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                    Clone missing ecosystem repos\n  --write-defaults               Write local config files using sensible defaults\n  --force                        Overwrite existing local config files\n  --build-iso                    Run yggdrasil build after config generation\n  --smoke                        Run smoke bench explicitly after build/config\n  --profile server|kde|both      Profile for build/smoke (default: both)\n  --skip-smoke                   Skip smoke inside mkconfig build step\n  --with-qemu                    Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                     Show this help\n\nExamples:\n  yggcli --bootstrap --write-defaults\n  yggcli --workspace ~/gh --build-iso --profile server\n  yggcli --workspace ~/gh --smoke --profile kde --with-qemu\n\nGuidance:\n  - First server build: keep apt_proxy_mode=off.\n  - After the host is alive, follow the apt-proxy LXC recipe in yggdocs and switch to apt_proxy_mode=explicit.\n  - Android/Termux hosts can configure yggclient and yggsync, but they do not build yggdrasil ISOs.\n\nTUI controls:\n  - Keyboard: Tab/Shift-Tab switch sections, Up/Down move, Enter toggles booleans, Ctrl-S saves, q quits.\n  - Mouse: click tabs, click fields, scroll within a section, click boolean values to toggle.\n"
+        "yggcli\n\nUsage:\n  yggcli                         Launch interactive TUI\n  yggcli [options]               Run non-interactive workflow\n\nOptions:\n  --workspace PATH               Workspace root (default: {DEFAULT_WORKSPACE})\n  --repo-base URL                Repo base for bootstrap clones (default: {DEFAULT_REPO_BASE})\n  --bootstrap                    Clone missing ecosystem repos\n  --write-defaults               Write local config files using sensible defaults\n  --force                        Overwrite existing local config files\n  --set section.key=value        Override one field before save/build (repeatable)\n  --build-iso                    Run yggdrasil build after config generation\n  --smoke                        Run smoke bench explicitly after build/config\n  --profile server|kde|both      Profile for build/smoke (default: both)\n  --skip-smoke                   Skip smoke inside mkconfig build step\n  --with-qemu                    Add QEMU/KVM smoke when running explicit smoke\n  -h, --help                     Show this help\n\nExamples:\n  yggcli --bootstrap --write-defaults\n  yggcli --workspace ~/gh --build-iso --profile server\n  yggcli --workspace ~/gh --smoke --profile kde --with-qemu\n  yggcli --workspace ~/gh --set yggdrasil.hostname=mewmew --set yggdrasil.net_mode=dhcp --build-iso --profile server\n\nGuidance:\n  - First server build: keep apt_proxy_mode=off.\n  - After the host is alive, follow the apt-proxy LXC recipe in yggdocs and switch to apt_proxy_mode=explicit.\n  - Android/Termux hosts can configure yggclient and yggsync, but they do not build yggdrasil ISOs.\n  - Non-interactive builds auto-use sudo -n when root privileges are required.\n\nTUI controls:\n  - Keyboard: Tab/Shift-Tab switch sections, Up/Down move, Enter toggles booleans, Ctrl-S saves, q quits.\n  - Mouse: click tabs, click fields, scroll within a section, click boolean values to toggle.\n"
     );
 }
 
@@ -791,6 +792,7 @@ fn parse_cli() -> Result<CliOptions, String> {
             "--build-iso" => opts.build_iso = true,
             "--smoke" => opts.smoke = true,
             "--profile" => opts.profile = args.next().ok_or("--profile requires a value")?,
+            "--set" => opts.sets.push(args.next().ok_or("--set requires section.key=value")?),
             "--skip-smoke" => opts.skip_smoke = true,
             "--with-qemu" => opts.with_qemu = true,
             "-h" | "--help" => opts.help = true,
@@ -807,7 +809,12 @@ fn parse_cli() -> Result<CliOptions, String> {
 }
 
 fn has_non_interactive_action(opts: &CliOptions) -> bool {
-    opts.bootstrap || opts.write_defaults || opts.build_iso || opts.smoke || opts.help
+    opts.bootstrap
+        || opts.write_defaults
+        || opts.build_iso
+        || opts.smoke
+        || !opts.sets.is_empty()
+        || opts.help
 }
 
 fn run_cmd(cmd: &mut Command) -> io::Result<()> {
@@ -820,6 +827,11 @@ fn run_cmd(cmd: &mut Command) -> io::Result<()> {
             format!("command failed with status {status}"),
         ))
     }
+}
+
+fn is_effective_root() -> io::Result<bool> {
+    let output = Command::new("id").arg("-u").output()?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "0")
 }
 
 fn bootstrap_repos(workspace_root: &Path, repo_base: &str, platform: &Platform) -> io::Result<()> {
@@ -848,7 +860,14 @@ fn run_build(
         ));
     }
     let repo = workspace_root.join("yggdrasil");
-    let mut cmd = Command::new("./mkconfig.sh");
+    let needs_sudo = !is_effective_root()?;
+    let mut cmd = if needs_sudo {
+        let mut cmd = Command::new("sudo");
+        cmd.arg("-n").arg("./mkconfig.sh");
+        cmd
+    } else {
+        Command::new("./mkconfig.sh")
+    };
     cmd.current_dir(repo)
         .arg("--config")
         .arg("./ygg.local.toml")
@@ -915,9 +934,14 @@ fn main() -> io::Result<()> {
             bootstrap_repos(&workspace_root, &opts.repo_base, &platform)?;
         }
 
-    let app = App::with_workspace(&opts.workspace_root);
-        if opts.write_defaults || opts.build_iso || opts.smoke {
-            let report = app.save(opts.force, &platform)?;
+        let mut app = App::with_workspace(&opts.workspace_root);
+        for spec in &opts.sets {
+            app.apply_override(spec)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        }
+        if opts.write_defaults || opts.build_iso || opts.smoke || !opts.sets.is_empty() {
+            let should_force = opts.force || !opts.sets.is_empty();
+            let report = app.save(should_force, &platform)?;
             if !report.written.is_empty() {
                 eprintln!(
                     "written: {}",
@@ -958,6 +982,43 @@ fn main() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
     result
+}
+
+impl App {
+    fn apply_override(&mut self, spec: &str) -> Result<(), String> {
+        let (path, value) = spec
+            .split_once('=')
+            .ok_or_else(|| format!("override must be section.key=value: {spec}"))?;
+        let (section, key) = path
+            .split_once('.')
+            .ok_or_else(|| format!("override must be section.key=value: {spec}"))?;
+        let fields = match section {
+            "workspace" => &mut self.workspace,
+            "yggdrasil" | "server" => &mut self.yggdrasil,
+            "yggclient" | "client" => &mut self.yggclient,
+            "yggsync" | "sync" => &mut self.yggsync,
+            other => return Err(format!("unknown override section: {other}")),
+        };
+        let field = fields
+            .iter_mut()
+            .find(|f| f.label == key)
+            .ok_or_else(|| format!("unknown override field: {section}.{key}"))?;
+        if field.bool_field {
+            let normalized = match value {
+                "true" | "1" | "yes" | "on" => "true",
+                "false" | "0" | "no" | "off" => "false",
+                _ => {
+                    return Err(format!(
+                        "invalid boolean override for {section}.{key}: {value}"
+                    ))
+                }
+            };
+            field.value = normalized.into();
+        } else {
+            field.value = value.into();
+        }
+        Ok(())
+    }
 }
 
 fn run_app(stdout: Stdout) -> io::Result<()> {
