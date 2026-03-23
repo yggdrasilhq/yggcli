@@ -2,260 +2,146 @@
 
 `yggcli` is the guided front door into the Yggdrasil ecosystem.
 
-It exists for the moment when someone wants the power of `yggdrasil`, `yggclient`, and `yggsync`, but not the early friction of memorizing every knob, file path, and prerequisite on day one.
-It does not invent a hidden control plane.
-It writes the real config files the ecosystem already uses, so the path from beginner to operator stays open.
+It does not create a hidden control plane.
+It writes the real config files the other repos already use, so the path from first-run user to confident operator stays open.
 
-That is the job:
+This README is the operator manual for using `yggcli` as the bootstrap layer for `yggdrasil`, `yggclient`, and `yggsync`.
 
-- make the first run feel guided instead of sharp-edged
-- make the second run feel familiar instead of magical
-- keep the generated files plain, inspectable, and editable
-- stay optional for seasoned users who prefer to drive the repos directly
+## Overview
 
-## The Ecosystem At A Glance
+Use `yggcli` when you want guided setup, sane defaults, and inspectable output files.
 
-A simple mental model helps:
+It is responsible for:
 
-- a `yggdrasil` server is the host you boot from the ISO
-- a `yggclient` machine is a laptop, desktop, or phone that talks to that host
-- `yggsync` moves the files you care about without turning your devices into a furnace
-- `yggcli` is the guide that writes the right config files for all of them
-
-```text
-                    +----------------------+
-                    |       yggdocs        |
-                    | recipes, wiki, dev   |
-                    +----------+-----------+
-                               |
-                               v
- +------------+      +---------+---------+      +-------------+
- | yggclient  |<---->|      yggsync      |<---->| yggclient   |
- | laptop     |      | sync engine/jobs  |      | phone       |
- +------+-----+      +---------+---------+      +------+------+
-        \                        |                       /
-         \                       |                      /
-          \                      v                     /
-           +-----------------------------------------+
-           |               yggdrasil                 |
-           | Debian sid ISO, ZFS, LXC, host runtime  |
-           +-------------------+---------------------+
-                               ^
-                               |
-                        +------+------+
-                        |   yggcli    |
-                        | config UX   |
-                        +-------------+
-```
-
-Mermaid version:
+- bootstrapping a workspace with the right repos
+- collecting config values through a TUI or CLI flags
+- writing native config files into those repos
+- optionally kicking off a server ISO build on Linux
 
 ```mermaid
 flowchart TD
-  D[yggdocs<br/>recipes, wiki, dev]
-  C[yggcli<br/>config UX]
-  S[yggdrasil<br/>server ISO + host runtime]
-  Y[yggsync<br/>sync engine]
-  L[yggclient laptop]
-  P[yggclient phone]
+    C[yggcli]
+    D[yggdrasil]
+    L[yggclient]
+    Y[yggsync]
+    T[yggtopo]
 
-  C --> S
-  C --> L
-  C --> P
-  C --> Y
-  L <--> Y
-  P <--> Y
-  Y <--> S
-  D --> C
-  D --> S
-  D --> L
-  D --> P
+    C --> D
+    C --> L
+    C --> Y
+    C --> T
+    L --> Y
 ```
 
-## Why It Exists
+## Concepts
 
-Yggdrasil is powerful, but the ecosystem is broader than a single ISO build script.
-A real user eventually touches:
+### Guide, Not Control Plane
 
-- server build profiles
-- SSH key embedding
-- host networking choices
-- client bootstrap
-- sync job definitions
+`yggcli` is meant to disappear after it has done its job.
 
-For a new operator, that can feel like a cliff.
-`yggcli` turns it into a staircase.
+It writes plain files so you can:
 
-It gives you:
+- inspect the generated output
+- edit it by hand later
+- version it normally
+- rerun `yggcli` without feeling trapped by it
 
-- an interactive terminal UI for guided configuration
-- a non-interactive mode for automation and agent orchestration
-- platform-aware behavior across Linux and Android/Termux
-- sensible defaults that can later be replaced with exact values
+### One Workspace, Real Repos
 
-## Quick Start
+On Linux, bootstrap keeps the ecosystem together in one workspace, including:
 
-Today, the canonical install path is the GitHub release installer:
+- `yggdrasil`
+- `yggclient`
+- `yggsync`
+- `yggdocs`
+- `yggterm`
+- `yggtopo`
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/yggdrasilhq/yggcli/main/install.sh | bash
-yggcli --help
-```
+On Android or Termux, the bootstrap is smaller and does not pull in server-build work.
 
-That gives you the current released binary without needing Rust locally.
+### Current Promise
 
-For local development:
+Today `yggcli` can:
 
-```bash
-cargo run
-```
+- launch an interactive TUI
+- bootstrap missing repos
+- write local config defaults
+- apply exact overrides with `--set`
+- run Linux ISO build and smoke flows
 
-If you are unsure where to start, use this sequence:
-
-1. bootstrap the workspace
-2. write defaults
-3. inspect the generated files
-4. build the server ISO
-5. come back later and tune the dials with intent
-
-Example:
-
-```bash
-yggcli --bootstrap --write-defaults
-yggcli --workspace ~/gh --build-iso --profile server
-```
-
-If you want to try the npm-style launcher path locally, it currently exists as the repo package and release launcher, not as a guaranteed public npm install name:
-
-```bash
-npx -y github:yggdrasilhq/yggcli --help
-```
+It should be thought of as a guided writer for ecosystem config, not as an all-purpose runtime manager.
 
 ## What It Writes
 
-`yggcli` writes the native config files already used by the ecosystem:
+`yggcli` writes the native files already used by the other repos:
 
 - `yggdrasil/ygg.local.toml`
 - `yggclient/yggclient.local.toml`
 - `yggclient/config/profiles.local.env`
 - `yggsync/ygg_sync.local.toml`
 
-That means:
+That split matters:
 
-- power users can keep editing the files by hand
-- automation can diff and version them normally
-- reruns feel like continuing work, not starting over
+- `yggdrasil` gets host-build settings
+- `yggclient` gets endpoint profile settings
+- `yggsync` gets sync-engine defaults
 
-## What A Server Is
+```mermaid
+flowchart LR
+    A[yggcli fields] --> B[yggdrasil/ygg.local.toml]
+    A --> C[yggclient/yggclient.local.toml]
+    A --> D[yggclient/config/profiles.local.env]
+    A --> E[yggsync/ygg_sync.local.toml]
+```
 
-A Yggdrasil server is not just “a Debian ISO.”
-It is the host foundation for the rest of the ecosystem:
+## First Run
 
-- bootable from USB
-- ZFS-aware
-- LXC-oriented
-- shaped to become the machine that holds the rest of your stack together
+### Linux Server
 
-For many users, this is the machine that will eventually run:
+The conservative first server path is still the right one.
 
-- storage
-- containers
-- sync targets
-- backups
-- service front doors
-
-`yggcli` helps you get that first server config into a sane state before you ask more of it.
-
-## What A Client Is
-
-A Yggdrasil client is the machine you actually touch every day:
-
-- a Debian laptop
-- a workhorse desktop
-- a phone running Termux
-
-The client side matters because that is where people feel the system.
-If sync is noisy, if setup is confusing, or if every machine needs hand-carved scripts, the ecosystem loses its warmth.
-
-That is why `yggcli` writes both:
-
-- `yggclient.local.toml`
-- `config/profiles.local.env`
-
-The modern config and the compatibility layer move together.
-
-## First-Time Experience
-
-For a first Yggdrasil server, the recommended path is conservative:
-
-1. keep `apt_proxy_mode=off`
-2. build and boot the host
-3. validate the host and container baseline
-4. create the apt-proxy LXC from the docs recipe
-5. switch later builds to `apt_proxy_mode=explicit`
-
-This is deliberate.
-The first success should be understandable.
-Speed comes after trust.
-
-Kernel guidance:
-
-- keep `with_lts=false` for the normal sid kernel path
-- switch to `with_lts=true` only when you intentionally want the compatibility-pinned kernel path
-- that compatibility path exists for ABI-sensitive cases such as troublesome DKMS stacks
-
-## Guided Examples
-
-### 1. First server, minimum decisions
+1. bootstrap the workspace
+2. write defaults
+3. inspect the generated files
+4. build the server ISO
+5. tune advanced options only after the first host is alive
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/yggdrasilhq/yggcli/main/install.sh | bash
 yggcli --bootstrap --write-defaults
 yggcli --workspace ~/gh --build-iso --profile server
 ```
 
-Use this when:
+First server guidance:
 
-- you want the baseline first
-- you are still learning the shape of the ecosystem
-- you do not yet want to decide every network and proxy detail
+- keep `apt_proxy_mode=off`
+- keep `infisical_boot_mode=disabled` unless you already run Infisical in an LXC
+- keep `with_lts=false` unless you intentionally want the compatibility-pinned kernel path
 
-### 2. Build a server with explicit overrides
+Later, after the host is alive:
 
-```bash
-yggcli --workspace ~/gh \
-  --set yggdrasil.hostname=mewmew \
-  --set yggdrasil.net_mode=dhcp \
-  --set yggdrasil.static_dns="192.168.1.1 9.11.11.11" \
-  --set yggdrasil.with_lts=false \
-  --set yggdrasil.with_nvidia=false \
-  --build-iso --profile server
-```
+- switch to `apt_proxy_mode=explicit` if you adopt the apt-proxy container pattern
+- switch to `infisical_boot_mode=container` only if you intentionally adopt that pattern
 
-Use this when:
+### Client And Sync Bootstrap
 
-- you know your host naming already
-- you want automation without opening the TUI
-- an agent or CI job is driving the build
-
-### 3. Configure client + sync without building an ISO
+Use this when the server already exists and you want endpoint defaults written cleanly.
 
 ```bash
 yggcli --workspace ~/gh \
   --set yggclient.profile_name=laptop \
   --set yggclient.user_name=alice \
-  --set yggclient.ssh_host=mewmew \
+  --set yggclient.ssh_host=nas-box \
   --set yggsync.notes_local=~/Documents/notes \
   --set yggsync.notes_remote=nas:users/alice/notes \
   --write-defaults --force
 ```
 
-Use this when:
+This is the mode most relevant to `yggclient` and `yggsync` onboarding.
 
-- the server already exists
-- you are onboarding a second machine
-- you want the ecosystem config, not a host rebuild
+### Android Or Termux
 
-### 4. Android or Termux device
+Android or Termux hosts can bootstrap the client-side stack, but they do not build `yggdrasil` ISOs.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yggdrasilhq/yggcli/main/install.sh | bash
@@ -264,14 +150,34 @@ yggcli --bootstrap --write-defaults
 
 Use this when:
 
-- you want to configure `yggclient` and `yggsync` on a phone
-- you want the safe defaults first
-- you do not want Android trying to do server-build work it should never do
+- you want `yggclient` and `yggsync` defaults on the phone
+- you want the safe path first
+- you do not want Android attempting server-build work
 
-## Non-Interactive Use
+## Normal Operation
 
-`yggcli` is not only a TUI.
-It can be used as an orchestration tool in CI, scripts, and agent workflows.
+### TUI
+
+Running `yggcli` with no arguments launches the interactive TUI.
+
+Use it when:
+
+- you want guided field-by-field editing
+- you are still learning the ecosystem
+- you want to save config without memorizing file paths
+
+Controls:
+
+- `Tab` / `Shift-Tab`: switch section
+- `Up` / `Down`: move between fields
+- `Enter`: toggle booleans
+- `Ctrl-S`: save generated files
+- `q`: quit
+- mouse: click tabs, click fields, scroll sections
+
+### Non-Interactive CLI
+
+Use the CLI mode when you need repeatability, exact overrides, or agent-friendly automation.
 
 Examples:
 
@@ -282,82 +188,119 @@ yggcli --workspace ~/gh --smoke --profile kde --with-qemu
 yggcli --workspace ~/gh \
   --set yggdrasil.hostname=mewmew \
   --set yggdrasil.net_mode=dhcp \
-  --set yggdrasil.macvlan_cidr=10.10.0.250/24 \
-  --set yggdrasil.macvlan_route=10.10.0.0/24 \
+  --set yggdrasil.with_lts=false \
   --build-iso --profile server
 ```
 
 Notes:
 
-- repeat `--set` to override exact fields without editing files by hand
-- ISO builds automatically use `sudo -n` when root privileges are required
-- Android/Termux hosts are blocked from server ISO build actions by design
+- repeat `--set` to override exact fields without hand-editing files first
+- Linux ISO builds automatically use `sudo -n` when root privileges are required
+- Linux bootstrap also clones `yggtopo`
+- Android or Termux hosts are blocked from server ISO build actions by design
 
-The non-interactive mode is there for disciplined work:
+## Bootstrap Patterns Worth Automating
 
-- repeatability
-- agent automation
-- CI or release benches
-- exact overrides without a one-off fork of the config files
+This is the section that should influence the future TUI design.
 
-## Interactive Controls
+The most useful end-user patterns look like this:
 
-- `Tab` / `Shift-Tab`: switch section
-- `Up` / `Down`: move between fields
-- `Enter`: toggle boolean fields
-- `Ctrl-S`: save generated config files
-- `q`: quit
-- mouse: click tabs, click fields, scroll within sections
+### 1. First Server, Minimum Risk
+
+The TUI should make the conservative first-host path obvious:
+
+- apt proxy off
+- Infisical boot disabled
+- normal sid kernel path
+- build first, optimize later
+
+### 2. Laptop With Mounted NAS
+
+The TUI should be able to ask:
+
+- is this endpoint using direct SMB credentials or a mounted NAS path
+- should the generated desktop service enforce a mount-point guard
+- which small jobs should be enabled first
+
+### 3. Android With Guarded Sync
+
+The TUI should be able to ask:
+
+- which Termux-accessible folders matter first
+- whether Wi-Fi-only should be required
+- what battery and temperature limits should gate jobs
+- whether Tailscale-dependent NAS access needs defer behavior
+
+### 4. Obsidian Worktree Bootstrap
+
+The TUI should be able to ask:
+
+- where the local vault lives
+- where the central repository lives
+- whether the first operation should be `update` or `commit`
+- which default filters to apply for `.obsidian`, trash, conflict files, and DOS aliases
+
+Those patterns are not just documentation ideas.
+They are the most likely high-value prompts to wire into `yggcli` next.
 
 ## Platform Behavior
 
-- Linux hosts can bootstrap the full workspace and run `yggdrasil` build and smoke actions.
-- Android/Termux hosts bootstrap `yggcli`, `yggclient`, `yggsync`, and `yggdocs`.
-- Android/Termux hosts do not run `yggdrasil` ISO builds or smoke benches.
-- Existing local config files are loaded first, so reruns behave like editing a live workspace.
+- Linux can bootstrap the full workspace and run `yggdrasil` build and smoke actions
+- Android or Termux bootstraps `yggcli`, `yggclient`, `yggsync`, and `yggdocs`
+- Android or Termux does not run `yggdrasil` ISO builds or smoke benches
+- existing local config files are loaded first, so reruns behave like editing a live workspace
 
-## Release Workflow
+## Troubleshooting
 
-`yggcli` is built from tagged releases with GitHub Actions.
+### The generated files look wrong
 
-Primary workflow file:
+That usually means either:
 
-- `.github/workflows/release.yml`
+- the wrong workspace was selected
+- `--set` overrides targeted the wrong section or key
+- existing local config files were loaded and are influencing what you see
 
-What it does:
+Inspect the generated files directly. That is the intended workflow.
 
-- runs tests
-- builds the Rust binary for Linux
-- attaches release assets to the GitHub release
-- keeps the release path aligned with `install.sh` and the JS launcher
+### Android is trying to behave like a server host
 
-There is also a CI workflow:
+That should not happen.
+Android or Termux is intentionally blocked from server ISO build actions.
 
-- `.github/workflows/ci.yml`
+### I only want the files, not the build
 
-That one exists to catch breakage on pushes and pull requests before a tag becomes a release.
+Use:
 
-## For Experienced Users
+```bash
+yggcli --bootstrap --write-defaults
+```
 
-You do not have to use `yggcli`.
+and stop there.
 
-If you already know the ecosystem well, you can continue to:
+### I already know the ecosystem and do not want a wizard
 
-- edit `ygg.local.toml` directly
-- run `mkconfig.sh` yourself
-- maintain `yggclient` and `yggsync` configs by hand
-
-`yggcli` is not here to trap you.
-It is here to lower friction, reduce mistakes, and make the common path obvious.
-
-If you already have a working mental model, use `yggcli` like a sharp utility:
+That is fine. Use `yggcli` as a sharp utility:
 
 - generate a starting config
 - inspect the diff
 - keep what helps
 - ignore the rest
 
-## Stack
+## Release And Development
+
+Install from the release installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yggdrasilhq/yggcli/main/install.sh | bash
+```
+
+Run locally during development:
+
+```bash
+cargo run
+```
+
+Stack:
 
 - Rust
 - ratatui
