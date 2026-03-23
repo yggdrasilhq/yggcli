@@ -66,6 +66,9 @@ Today `yggcli` can:
 - launch an interactive TUI
 - bootstrap missing repos
 - write local config defaults
+- render the live runtime `~/.config/ygg_sync.toml`
+- fetch `yggsync`
+- apply the platform-appropriate client stack
 - apply exact overrides with `--set`
 - run Linux ISO build and smoke flows
 
@@ -131,10 +134,12 @@ Use this when the server already exists and you want endpoint defaults written c
 yggcli --workspace ~/gh \
   --set yggclient.profile_name=laptop \
   --set yggclient.user_name=alice \
+  --set yggclient.samba_host=nas.internal \
+  --set yggclient.samba_username=smb-login \
   --set yggclient.ssh_host=nas-box \
   --set yggsync.notes_local=~/Documents/notes \
-  --set yggsync.notes_remote=nas:users/alice/notes \
-  --write-defaults --force
+  --set yggsync.notes_remote_path=smbfs/alice/notes \
+  --write-defaults --render-runtime-config
 ```
 
 This is the mode most relevant to `yggclient` and `yggsync` onboarding.
@@ -164,16 +169,26 @@ Use it when:
 
 - you want guided field-by-field editing
 - you are still learning the ecosystem
-- you want to save config without memorizing file paths
+- you want to run bootstrap and apply actions without memorizing file paths or scripts
 
 Controls:
 
 - `Tab` / `Shift-Tab`: switch section
 - `Up` / `Down`: move between fields
 - `Enter`: toggle booleans
-- `Ctrl-S`: save generated files
+- `Ctrl-B`: bootstrap the workspace
+- `Ctrl-S`: save generated local config files
+- `Ctrl-R`: render the live runtime `~/.config/ygg_sync.toml`
+- `Ctrl-F`: fetch `yggsync`
+- `Ctrl-Y`: apply the endpoint stack
+- `Ctrl-D`: install desktop `yggsync` service and timer on Linux
+- `Ctrl-A`: run Android setup on Termux
+- `Ctrl-I`: build the server ISO on Linux
+- `Ctrl-M`: run smoke on Linux
 - `q`: quit
 - mouse: click tabs, click fields, scroll sections
+
+The right side of the TUI explains the selected field and shows the equivalent CLI flags for the main actions.
 
 ### Non-Interactive CLI
 
@@ -183,6 +198,10 @@ Examples:
 
 ```bash
 yggcli --bootstrap --write-defaults
+yggcli --list-actions
+yggcli --list-fields
+yggcli --workspace ~/gh --apply-client-stack
+yggcli --workspace ~/gh --render-runtime-config
 yggcli --workspace ~/gh --build-iso --profile server
 yggcli --workspace ~/gh --smoke --profile kde --with-qemu
 yggcli --workspace ~/gh \
@@ -195,9 +214,12 @@ yggcli --workspace ~/gh \
 Notes:
 
 - repeat `--set` to override exact fields without hand-editing files first
+- `--list-fields` makes the override surface self-documenting
+- `--list-actions` makes the supported platform actions self-documenting
 - Linux ISO builds automatically use `sudo -n` when root privileges are required
 - Linux bootstrap also clones `yggtopo`
 - Android or Termux hosts are blocked from server ISO build actions by design
+- `--apply-client-stack` is the high-level non-interactive endpoint path
 
 ## Bootstrap Patterns Worth Automating
 
