@@ -35,10 +35,13 @@ jobs:
           cp target/release/yggcli dist/yggcli-linux-amd64
           sha256sum dist/yggcli-linux-amd64 > dist/yggcli-linux-amd64.sha256
 
+      - name: Generate curated release notes
+        run: ./scripts/release-notes.sh "${{ github.ref_name }}" > dist/RELEASE_NOTES.md
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/yggcli-linux-amd64
             dist/yggcli-linux-amd64.sha256
-          generate_release_notes: true
+          body_path: dist/RELEASE_NOTES.md
