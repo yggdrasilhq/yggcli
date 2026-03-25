@@ -1,0 +1,22 @@
+# AGENTS
+
+## Mission
+
+Maintain `yggcli` as the guided front door into the Yggdrasil ecosystem.
+
+It should help users bootstrap real repos, write real config files, and then get out of the way.
+
+## Boundaries
+
+- `yggcli` guides and writes native config.
+- `yggdrasil` owns host build logic.
+- `yggclient` owns endpoint-side automation.
+- `yggsync` owns the sync engine and runtime behavior.
+
+## README Contract
+
+- Treat `README.md` as the primary operator manual and product pitch.
+- Keep the fastest install path and the safest first-run path near the top.
+- Prefer real examples over abstract descriptions: bootstrap, inspect, write, build, recover.
+- When flows change, update the README in the same change so the manual stays trustworthy.
+- If a changelog or release note exists, use it to explain visible user wins rather than internal refactors.
